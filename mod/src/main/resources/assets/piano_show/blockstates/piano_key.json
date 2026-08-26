@@ -1,0 +1,8 @@
+{
+  "variants": {
+    "key_kind=white,pressed=false": {"model": "piano_show:block/piano_key_white"},
+    "key_kind=white,pressed=true": {"model": "piano_show:block/piano_key_white_pressed"},
+    "key_kind=black,pressed=false": {"model": "piano_show:block/piano_key_black"},
+    "key_kind=black,pressed=true": {"model": "piano_show:block/piano_key_black_pressed"}
+  }
+}

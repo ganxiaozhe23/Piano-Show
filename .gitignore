@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+editor/build/
+mod/.gradle/
+mod/build/
+mod/run/
+mod/run-*.log
+config/piano-shows/*.pshow

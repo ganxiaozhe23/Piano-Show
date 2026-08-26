@@ -1,0 +1,6 @@
+{
+  "parent": "piano_show:block/piano_key_white",
+  "textures": {
+    "top": "minecraft:block/cyan_concrete"
+  }
+}
