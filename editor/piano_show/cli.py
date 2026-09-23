@@ -24,7 +24,14 @@ def _build_parser() -> argparse.ArgumentParser:
     import_parser.add_argument("--note-max", type=int, default=108)
     import_parser.add_argument("--origin", nargs=3, type=int, default=(0, 64, 0), metavar=("X", "Y", "Z"))
     import_parser.add_argument("--orientation", default="wall_north", choices=("wall_north", "wall_south", "wall_east", "wall_west", "floor"))
+    import_parser.add_argument("--surface", choices=("wall_north", "wall_south", "wall_east", "wall_west", "floor"), help="v2 canvas surface (overrides --orientation)")
     import_parser.add_argument("--canvas-gap", type=int, default=8)
+    import_parser.add_argument("--canvas-offset", nargs=3, type=int, default=(0, 0, 0), metavar=("X", "Y", "Z"))
+    import_parser.add_argument("--image-rotation", type=int, choices=(0, 90, 180, 270), default=0)
+    import_parser.add_argument("--motion-mode", choices=("arc", "ballistic", "vanilla"), default="arc")
+    import_parser.add_argument("--motion-gravity", type=float, default=0.04)
+    import_parser.add_argument("--motion-drag", type=float, default=0.98)
+    import_parser.add_argument("--motion-arc-height", type=float, default=1.5, help="arc height in blocks; any finite non-negative value")
     import_parser.add_argument("--keyboard-depth", type=int, default=4)
     import_parser.add_argument("--seed", type=int, default=0)
     import_parser.add_argument("--max-active-falling-blocks", type=int, default=512)
@@ -78,6 +85,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.command == "import":
+        surface = args.surface or args.orientation
         options = CompileOptions(
             resolution=args.resolution,
             note_min=args.note_min,
@@ -85,9 +93,15 @@ def main(argv: list[str] | None = None) -> int:
             tempo_scale=args.tempo_scale,
             palette_id=args.palette.stem if args.palette else "minecraft_32",
             origin=tuple(args.origin),
-            orientation=args.orientation,
-            surface=args.orientation,
+            orientation=surface,
+            surface=surface,
             canvas_gap=args.canvas_gap,
+            canvas_offset=tuple(args.canvas_offset),
+            image_rotation=args.image_rotation,
+            motion_mode=args.motion_mode,
+            motion_gravity=args.motion_gravity,
+            motion_drag=args.motion_drag,
+            motion_arc_height=args.motion_arc_height,
             keyboard_depth=args.keyboard_depth,
             pixel_scale=args.pixel_scale,
             visual_mode=args.visual_mode,

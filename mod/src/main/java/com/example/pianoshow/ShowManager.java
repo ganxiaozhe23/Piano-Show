@@ -17,6 +17,7 @@ import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.nbt.NbtCompound;
+import net.minecraft.nbt.NbtDouble;
 import net.minecraft.nbt.NbtFloat;
 import net.minecraft.nbt.NbtHelper;
 import net.minecraft.nbt.NbtList;
@@ -63,6 +64,7 @@ public final class ShowManager {
     private boolean playing;
     private boolean stageBuilt;
     private boolean loggedFlightSpawn;
+    private int loggedFlightSamples;
     private int lastSpawned;
     private int lastCommitted;
     private double speed = 1.0;
@@ -103,6 +105,7 @@ public final class ShowManager {
         this.originalBlocks.clear();
         this.committedQueueIndices.clear();
         this.loggedFlightSpawn = false;
+        this.loggedFlightSamples = 0;
         this.lastSpawned = 0;
         this.lastCommitted = 0;
         this.totalEntityPositionUpdates = 0;
@@ -137,6 +140,7 @@ public final class ShowManager {
         this.pixelsToSpawn.clear();
         this.committedQueueIndices.clear();
         this.loggedFlightSpawn = false;
+        this.loggedFlightSamples = 0;
         this.lastSpawned = 0;
         this.lastCommitted = 0;
         discardDisplays();
@@ -184,6 +188,7 @@ public final class ShowManager {
                 + ", committedPixels=" + committedQueueIndices.size()
                 + ", flightTicks=" + (show == null ? "n/a" : show.flightTicksMin() + ".." + show.flightTicksMax())
                 + ", snapTicks=" + (show == null ? "n/a" : show.snapTicks())
+                + ", motionMode=" + (show == null ? "n/a" : show.motionMode())
                 + ", lastSpawned=" + lastSpawned
                 + ", lastCommitted=" + lastCommitted;
     }
@@ -209,17 +214,24 @@ public final class ShowManager {
     public String layoutSummary() {
         if (show == null || layout == null) return "no show loaded";
         BlockPos canvas = layout.canvasOrigin(origin);
+        BlockPos baseCanvas = canvas.add(-layout.canvasOffsetX(), -layout.canvasOffsetY(), -layout.canvasOffsetZ());
         return "surface=" + layout.surface().name().toLowerCase()
                 + ", keyboard=" + (layout.noteMax() - layout.noteMin() + 1) + " keys"
                 + ", canvas=" + show.imageWidth() + "x" + show.imageHeight() + " logical"
                 + " (" + layout.physicalWidth() + "x" + layout.physicalHeight() + ", scale=" + layout.pixelScale() + ")"
                 + ", visualMode=" + show.visualMode()
                 + ", timingMode=" + show.timingMode()
+                + ", motionMode=" + show.motionMode()
+                + ", motionGravity=" + show.motionGravity()
+                + ", motionDrag=" + show.motionDrag()
                 + ", origin=" + origin.toShortString()
+                + ", canvasBaseOrigin=" + baseCanvas.toShortString()
+                + ", canvasOffset=[" + layout.canvasOffsetX() + "," + layout.canvasOffsetY() + "," + layout.canvasOffsetZ() + "]"
                 + ", canvasOrigin=" + canvas.toShortString()
                 + ", events=" + eventCount()
                 + ", pixels=" + pixelCount()
                 + ", queuedPixels=" + pixelsToSpawn.size()
+                + ", activeDisplays=" + activeDisplayCount()
                 + ", activeFallingBlocks=" + activeFallingBlockCount()
                 + ", pendingCommits=" + pendingCommits.size()
                 + ", committedPixels=" + committedPixelCount()
@@ -229,6 +241,22 @@ public final class ShowManager {
     public void manualNote(ServerWorld world, BlockPos position, int note) {
         this.world = world;
         triggerNote(note, 110, -1, false, position);
+    }
+
+    /** Build the currently loaded show at a world position selected by the placement item. */
+    public void placeAt(ServerWorld world, BlockPos base) {
+        if (!isLoaded()) throw new IllegalStateException("load a show first");
+        if (isPlaying()) throw new IllegalStateException("stop the current show before moving the stage");
+        // Preserve the note range encoded by the loaded package.  The old
+        // placer always built an 88-key keyboard, which made custom projects
+        // launch from keys that did not exist in the stage preview.
+        buildKeyboard(world, base, layout.noteMin(), layout.noteMax());
+    }
+
+    /** Build using the note range from the loaded package. */
+    public void buildKeyboard(ServerWorld world, BlockPos base) {
+        if (!isLoaded() || layout == null) throw new IllegalStateException("load a show first");
+        buildKeyboard(world, base, layout.noteMin(), layout.noteMax());
     }
 
     public void seek(long tick) {
@@ -281,7 +309,9 @@ public final class ShowManager {
         this.world = world;
         this.origin = base;
         this.layout = new PianoLayout(noteMin, noteMax, layout.keyboardDepth(), layout.canvasGap(), layout.surface(),
-                layout.imageWidth(), layout.imageHeight(), layout.pixelScale(), layout.canvasLift());
+                layout.imageWidth(), layout.imageHeight(), layout.pixelScale(), layout.canvasLift(),
+                layout.canvasOffsetX(), layout.canvasOffsetY(), layout.canvasOffsetZ(),
+                layout.backingThickness(), layout.borderThickness());
         this.stageQueue.clear();
         this.keyPositions.clear();
         this.pressedUntil.clear();
@@ -324,26 +354,40 @@ public final class ShowManager {
         BlockPos canvas = layout.canvasOrigin(base);
         BlockState backing = layoutBlock("backingBlock", Blocks.BLACK_CONCRETE);
         BlockState border = layoutBlock("borderBlock", Blocks.GRAY_CONCRETE);
-        for (int x = -1; x <= width; x++) for (int y = -1; y <= height; y++) {
-            BlockPos pos = canvasStagePos(canvas, x, y);
-            queueStage(pos, backing);
+        for (int depth = 0; depth < layout.backingThickness(); depth++) {
+            for (int x = -1; x <= width; x++) for (int y = -1; y <= height; y++) {
+                BlockPos pos = canvasStagePos(canvas, x, y, depth);
+                queueStage(pos, backing);
+            }
         }
-        for (int x = -2; x <= width + 1; x++) {
-            queueStage(canvasStagePos(canvas, x, -2), border);
-            queueStage(canvasStagePos(canvas, x, height + 1), border);
+        int borderWidth = layout.borderThickness();
+        for (int x = -borderWidth; x <= width + borderWidth - 1; x++) {
+            queueStage(canvasStagePos(canvas, x, -borderWidth, 0), border);
+            queueStage(canvasStagePos(canvas, x, height + borderWidth - 1, 0), border);
         }
-        for (int y = -1; y <= height; y++) {
-            queueStage(canvasStagePos(canvas, -2, y), border);
-            queueStage(canvasStagePos(canvas, width + 1, y), border);
+        for (int y = -borderWidth + 1; y <= height + borderWidth - 2; y++) {
+            queueStage(canvasStagePos(canvas, -borderWidth, y, 0), border);
+            queueStage(canvasStagePos(canvas, width + borderWidth - 1, y, 0), border);
         }
     }
 
     private BlockPos canvasStagePos(BlockPos anchor, int x, int y) {
-        return switch (layout.surface()) {
+        return canvasStagePos(anchor, x, y, 0);
+    }
+
+    private BlockPos canvasStagePos(BlockPos anchor, int x, int y, int depth) {
+        BlockPos face = switch (layout.surface()) {
             case FLOOR -> anchor.add(x, 0, y);
             case WALL_NORTH, WALL_SOUTH -> anchor.add(x, -y, 0);
             case WALL_EAST -> anchor.add(0, -y, x);
             case WALL_WEST -> anchor.add(0, -y, -x);
+        };
+        return switch (layout.surface()) {
+            case FLOOR -> face.add(0, -depth, 0);
+            case WALL_NORTH -> face.add(0, 0, -depth);
+            case WALL_SOUTH -> face.add(0, 0, depth);
+            case WALL_EAST -> face.add(depth, 0, 0);
+            case WALL_WEST -> face.add(-depth, 0, 0);
         };
     }
 
@@ -357,7 +401,7 @@ public final class ShowManager {
         return block == null ? fallback.getDefaultState() : block.getDefaultState();
     }
 
-    /** Runs before vanilla world/entity ticks so FallingBlockEntity cannot land early. */
+    /** Runs before world/entity ticks so payload state is observed consistently. */
     private void startTick() {
         if (server == null) return;
         tickStartNanos = System.nanoTime();
@@ -409,6 +453,7 @@ public final class ShowManager {
 
     private void triggerNote(int note, int velocity, int eventIndex, boolean allocatePixels, BlockPos manualPosition, long durationTicks) {
         if (world == null || show == null || layout == null) return;
+        BlockPos sourceKey = manualPosition == null ? layout.noteKeyBlock(origin, note) : manualPosition;
         Vec3d launch = manualPosition == null ? layout.noteLaunchPosition(origin, note) : manualPosition.toCenterPos().add(0, 0.6, 0);
         float soundPitch = (float) Math.pow(2.0, (note - 60) / 12.0);
         world.playSound(null, launch.x, launch.y, launch.z, SoundEvents.BLOCK_NOTE_BLOCK_HARP.value(), SoundCategory.RECORDS, Math.min(1.5f, velocity / 80.0f), Math.max(0.5f, Math.min(2.0f, soundPitch)));
@@ -416,7 +461,11 @@ public final class ShowManager {
         if (allocatePixels && !show.pixels().isEmpty()) {
             int pixelStart = (int) ((long) eventIndex * show.pixels().size() / show.events().size());
             int pixelEnd = (int) ((long) (eventIndex + 1) * show.pixels().size() / show.events().size());
-            for (int i = pixelStart; i < pixelEnd; i++) pixelsToSpawn.addLast(new PendingPixel(show.pixels().get(i), new NoteEvent(0, note, velocity, durationTicks, 0, 0), eventIndex));
+            for (int i = pixelStart; i < pixelEnd; i++) {
+                pixelsToSpawn.addLast(new PendingPixel(show.pixels().get(i),
+                        new NoteEvent(0, note, velocity, durationTicks, 0, 0),
+                        eventIndex, note, sourceKey, launch));
+            }
         }
         spawnNoteParticles(launch, velocity);
     }
@@ -461,44 +510,70 @@ public final class ShowManager {
         TimingController.Budget timing = TimingController.budget(show, playbackTick, nextEvent,
                 pixelsToSpawn.size(), activeDisplays.size());
         int spawned = 0;
-        while (!pixelsToSpawn.isEmpty() && spawned < timing.spawnPerTick() && activeDisplays.size() < show.maxActiveFallingBlocks()) {
+        int activeLimit = "display".equals(show.visualMode())
+                ? show.maxActiveDisplays() : show.maxActiveFallingBlocks();
+        while (!pixelsToSpawn.isEmpty() && spawned < timing.spawnPerTick() && activeDisplays.size() < activeLimit) {
             PendingPixel pending = pixelsToSpawn.pollFirst();
-            Vec3d start = layout.noteLaunchPosition(origin, pending.event().note());
+            Vec3d start = pending.launchPosition() != null
+                    ? pending.launchPosition()
+                    : layout.noteLaunchPosition(origin, pending.sourceNote());
             Vec3d target = targetPosition(pending.pixel());
+            BlockState payloadState = blockState(pending.pixel().paletteIndex());
+            long duration = "adaptive".equals(show.timingMode())
+                    ? timing.flightTicks()
+                    : show.flightTicksForVelocity(pending.event().velocity());
+            long seed = show.randomSeed() ^ ((long) pending.eventIndex() * 0x9E3779B97F4A7C15L)
+                    ^ pending.pixel().queueIndex();
+            // Legacy v1 payloads used a small fixed visual scatter. Keep that
+            // fallback while v2 packages opt into the configurable radius.
+            double scatterRadius = show.formatVersion() >= 2 ? show.scatterRadius() : 0.12;
+            boolean vanillaPhysics = "vanilla".equals(show.motionMode())
+                    && "physical".equals(show.visualMode());
+            MotionPath motion = "ballistic".equals(show.motionMode()) || vanillaPhysics
+                    ? (vanillaPhysics
+                    ? MotionCalculator.vanillaPath(layout, start, target, duration,
+                    show.motionGravity(), show.motionDrag(), scatterRadius, seed)
+                    : MotionCalculator.ballistic(layout, start, target, duration,
+                    show.motionGravity(), show.motionDrag(), scatterRadius, seed))
+                    : MotionCalculator.arc(layout, start, target, duration,
+                    show.motionArcHeight(), scatterRadius, seed);
+            Vec3d initialVelocity = vanillaPhysics
+                    ? MotionCalculator.vanillaVelocity(start, target, duration,
+                    show.motionGravity(), show.motionDrag())
+                    : Vec3d.ZERO;
             Entity display = "display".equals(show.visualMode())
-                    ? createBlockDisplay(blockState(pending.pixel().paletteIndex()), start, layout.pixelScale())
-                    : createFallingBlock(blockState(pending.pixel().paletteIndex()), start);
+                    ? createBlockDisplay(payloadState, start, layout.pixelScale())
+                    : createFallingBlock(payloadState, start, initialVelocity, vanillaPhysics);
             if (display == null) {
                 world.spawnParticles(ParticleTypes.END_ROD, start.x, start.y, start.z, 2, 0.2, 0.2, 0.2, 0.03);
                 pendingCommits.addLast(pending);
                 spawned++;
                 continue;
             }
-            long duration = "adaptive".equals(show.timingMode())
-                    ? timing.flightTicks()
-                    : show.flightTicksForVelocity(pending.event().velocity());
-            long seed = show.randomSeed() ^ ((long) pending.eventIndex() * 0x9E3779B97F4A7C15L)
-                    ^ pending.pixel().queueIndex();
-            SplittableRandom random = new SplittableRandom(seed);
-            Vec3d scatter = new Vec3d(random.nextDouble(-0.12, 0.12), 0, random.nextDouble(-0.12, 0.12));
-            Vec3d mid = start.lerp(target, 0.52).add(0, 1.5 + Math.min(6.0, target.distanceTo(start) * 0.08), 0);
-            activeDisplays.add(new FlyingPixel(display, pending.pixel(), start, mid, target, visualTick, duration, 1.5,
-                    scatter, random.nextDouble(Math.PI * 2), show.snapTicks(), true,
-                    "display".equals(show.visualMode())));
+            activeDisplays.add(new FlyingPixel(display, payloadState, pending.pixel(), pending.eventIndex(), pending.sourceNote(),
+                    pending.sourceKeyBlock(), motion, visualTick, duration, show.snapTicks(), true,
+                    "display".equals(show.visualMode()), vanillaPhysics, initialVelocity,
+                    vanillaPhysics ? Math.max(duration + 80, 100) : duration));
             lastSpawned++;
-            if (!loggedFlightSpawn) {
-                PianoShowMod.LOGGER.info("Piano payload flight started: queueIndex={}, start={}, target={}, durationTicks={}",
-                        pending.pixel().queueIndex(), start, target, duration);
+            if (!loggedFlightSpawn || loggedFlightSamples < 12 || pending.eventIndex() % 128 == 0) {
+                PianoShowMod.LOGGER.info("Piano payload flight started: queueIndex={}, eventIndex={}, note={}, key={}, entity={}, block={}, start={}, target={}, durationTicks={}, motionMode={}, gravity={}, drag={}, initialVelocity={}, motionNbt=[{}d,{}d,{}d]",
+                        pending.pixel().queueIndex(), pending.eventIndex(), pending.sourceNote(), pending.sourceKeyBlock(),
+                        display.getUuid(), payloadState.getBlock(), start, target, duration, show.motionMode(),
+                        show.motionGravity(), show.motionDrag(), initialVelocity,
+                        initialVelocity.x, initialVelocity.y, initialVelocity.z);
                 loggedFlightSpawn = true;
+                loggedFlightSamples++;
             }
             spawned++;
         }
     }
 
-    private Entity createFallingBlock(BlockState state, Vec3d start) {
+    private Entity createFallingBlock(BlockState state, Vec3d start, Vec3d initialVelocity, boolean vanillaPhysics) {
         try {
-            // spawnFromBlock replaces its source with the fluid state. Prefer the actual launch cell
-            // so the spawn packet starts at the key, then search upward only if that cell is occupied.
+            // spawnFromBlock inserts the entity immediately (the constructor
+            // is private in vanilla), so all initial state is applied before
+            // returning it.  Prefer an air staging cell at the key and move
+            // the entity to the precise launch point below.
             BlockPos launchPos = BlockPos.ofFloored(start);
             BlockPos spawnPos = null;
             for (int offset = 0; offset <= 3; offset++) {
@@ -514,14 +589,18 @@ public final class ShowManager {
             }
             FallingBlockEntity falling = FallingBlockEntity.spawnFromBlock(world, spawnPos, state);
             falling.setPosition(start);
-            falling.refreshPositionAfterTeleport(start);
             falling.setOnGround(false);
-            falling.setNoGravity(true);
+            // Vanilla mode intentionally leaves gravity, drag and collision to
+            // FallingBlockEntity. The manual physical mode keeps the old
+            // no-gravity path for compatibility with arc/ballistic motion.
+            falling.setNoGravity(!vanillaPhysics);
             falling.setInvulnerable(true);
             // Never let vanilla place this entity at a collision position; the mod owns the exact target commit.
             falling.setDestroyedOnLanding();
             falling.dropItem = false;
-            falling.setVelocity(Vec3d.ZERO);
+            Vec3d motion = vanillaPhysics ? initialVelocity : Vec3d.ZERO;
+            falling.setVelocity(motion);
+            if (vanillaPhysics) writeVanillaMotion(falling, motion);
             falling.setFallingBlockPos(spawnPos);
             return falling;
         } catch (RuntimeException exception) {
@@ -530,14 +609,41 @@ public final class ShowManager {
         }
     }
 
+    /** Write the canonical entity NBT Motion:[vx,vy,vz] payload for debugging,
+     * save/reload compatibility, and parity with summon commands. */
+    private void writeVanillaMotion(FallingBlockEntity falling, Vec3d motion) {
+        // Preserve the entity's complete state while replacing only Motion;
+        // feeding a partial compound to Entity.readNbt would reset position
+        // and FallingBlock-specific fields on some mappings.
+        NbtCompound nbt = falling.writeNbt(new NbtCompound());
+        NbtList values = new NbtList();
+        values.add(NbtDouble.of(motion.x));
+        values.add(NbtDouble.of(motion.y));
+        values.add(NbtDouble.of(motion.z));
+        nbt.put("Motion", values);
+        falling.readNbt(nbt);
+        // Keep the live server velocity explicitly synchronized with the NBT
+        // value; this is harmless for [0.0d,0.0d,0.0d] and preserves vanilla
+        // gravity for the following tick.
+        falling.setVelocity(motion);
+        PianoShowMod.LOGGER.debug("Vanilla Motion NBT entity={} Motion:[{}d,{}d,{}d]", falling.getUuid(), motion.x, motion.y, motion.z);
+    }
+
     private Entity createBlockDisplay(BlockState state, Vec3d start, int pixelScale) {
         try {
             DisplayEntity.BlockDisplayEntity display = EntityType.BLOCK_DISPLAY.create(world);
             if (display == null) return null;
             display.setPosition(start);
             display.setNoGravity(true);
-            applyDisplayNbt(display, state, new Vec3d(0, 0, 0), pixelScale, 8);
-            world.spawnEntity(display);
+            // The spawn packet establishes the first transform. Movement is
+            // scheduled on the following server tick so clients have a stable
+            // start pose to interpolate from.
+            applyDisplayNbt(display, state, new Vec3d(0, 0, 0), pixelScale, 1);
+            if (!world.spawnEntity(display)) {
+                PianoShowMod.LOGGER.warn("Server rejected piano Display payload entity={} at {}", display.getUuid(), start);
+                display.discard();
+                return null;
+            }
             return display;
         } catch (RuntimeException exception) {
             PianoShowMod.LOGGER.warn("Unable to create block display for piano show", exception);
@@ -549,12 +655,36 @@ public final class ShowManager {
         if (activeDisplays.isEmpty()) return;
         List<FlyingPixel> finished = new ArrayList<>();
         for (FlyingPixel flying : activeDisplays) {
+            if (flying.vanillaPhysics()) {
+                long elapsed = Math.max(0, visualTick - flying.startTick());
+                Vec3d position = flying.entity().getPos();
+                Vec3d velocity = flying.entity().getVelocity();
+                String reason = null;
+                boolean removed = !flying.entity().isAlive() || flying.entity().isRemoved();
+                if (removed) reason = "entity_removed";
+                else if (flying.entity().isOnGround()) reason = "collision_or_landing";
+                else if (elapsed >= flying.maxLifetimeTicks()) reason = "timeout";
+                else if (outsideMotionBounds(position, flying.motion())) reason = "out_of_bounds";
+                if (reason != null) {
+                    flying.entity().discard();
+                    if (flying.commit() && flying.pixel() != null) {
+                        pendingCommits.addLast(PendingPixel.forCommit(flying.pixel()));
+                        if (!"collision_or_landing".equals(reason)) totalLostPayloads++;
+                        PianoShowMod.LOGGER.info("Vanilla Motion payload finished: reason={}, queueIndex={}, eventIndex={}, note={}, key={}, entity={}, position={}, velocity={}, target={}, initialVelocity={}",
+                                reason, flying.pixel().queueIndex(), flying.sourceEventIndex(), flying.sourceNote(),
+                                flying.sourceKeyBlock(), flying.entity().getUuid(), position, velocity, flying.motion().target(), flying.initialVelocity());
+                    }
+                    finished.add(flying);
+                }
+                continue;
+            }
             if (!flying.entity().isAlive() || flying.entity().isRemoved()) {
                 if (flying.commit() && flying.pixel() != null) {
-                    pendingCommits.addLast(new PendingPixel(flying.pixel(), null, -1));
+                    pendingCommits.addLast(PendingPixel.forCommit(flying.pixel()));
                     totalLostPayloads++;
-                    PianoShowMod.LOGGER.warn("Payload entity disappeared before target: queueIndex={}, lastPosition={}, target={}",
-                            flying.pixel().queueIndex(), flying.entity().getPos(), flying.target());
+                    PianoShowMod.LOGGER.warn("Payload entity disappeared before target: queueIndex={}, eventIndex={}, note={}, key={}, entity={}, lastPosition={}, target={}",
+                            flying.pixel().queueIndex(), flying.sourceEventIndex(), flying.sourceNote(), flying.sourceKeyBlock(),
+                            flying.entity().getUuid(), flying.entity().getPos(), flying.motion().target());
                 }
                 finished.add(flying);
                 continue;
@@ -563,54 +693,75 @@ public final class ShowManager {
             long remaining = flying.durationTicks() - elapsed;
             double progress = Math.min(1.0, elapsed / (double) flying.durationTicks());
             if (flying.displayMode()) {
-                if (remaining <= 0) {
+                // Keep the entity alive for one server tick after the client
+                // interpolation duration so the final pose can be rendered
+                // before the payload is removed and committed.
+                if (remaining < 0) {
                     flying.entity().discard();
-                    if (flying.commit() && flying.pixel() != null) pendingCommits.addLast(new PendingPixel(flying.pixel(), null, -1));
+                    if (flying.commit() && flying.pixel() != null) pendingCommits.addLast(PendingPixel.forCommit(flying.pixel()));
                     finished.add(flying);
-                } else if (elapsed == flying.durationTicks() / 2) {
-                    setDisplayTranslation(flying.entity(), flying.mid().subtract(flying.start()), layout.pixelScale());
-                    totalDisplayTransitions++;
-                } else if (elapsed == flying.durationTicks() - 1) {
-                    setDisplayTranslation(flying.entity(), flying.target().subtract(flying.start()), layout.pixelScale());
-                    totalDisplayTransitions++;
+                } else {
+                    int maxSegments = "ballistic".equals(show.motionMode()) ? 4 : 2;
+                    List<Vec3d> frames = flying.motion().keyframes(maxSegments);
+                    int segments = frames.size() - 1;
+                    for (int phase = 1; phase < frames.size(); phase++) {
+                        long boundary = phase == 1 ? 1 : 1 + Math.round((phase - 1) * flying.durationTicks() / (double) segments);
+                        // Start interpolating on the first server tick after
+                        // spawn. Later phases begin when the previous segment
+                        // reaches its boundary.
+                        if (elapsed == boundary) {
+                            long nextBoundary = 1 + Math.round(phase * flying.durationTicks() / (double) segments);
+                            long segmentTicks = Math.max(1, nextBoundary - boundary);
+                            setDisplayTranslation(flying.entity(), flying.state(), frames.get(phase).subtract(flying.motion().start()), layout.pixelScale(), (int) segmentTicks);
+                            totalDisplayTransitions++;
+                            PianoShowMod.LOGGER.debug("Piano Display interpolation phase={} queueIndex={} eventIndex={} note={} key={} entity={} durationTicks={} motionMode={}",
+                                    phase, flying.pixel().queueIndex(), flying.sourceEventIndex(), flying.sourceNote(), flying.sourceKeyBlock(),
+                                    flying.entity().getUuid(), segmentTicks, show.motionMode());
+                            break;
+                        }
+                    }
                 }
                 continue;
             }
-            Vec3d position;
-            if (remaining <= flying.snapTicks()) {
-                position = flying.target();
-            } else {
-                double arc = Math.sin(progress * Math.PI) * flying.arcHeight();
-                double scatterEnvelope = Math.sin(progress * Math.PI);
-                Vec3d scatter = flying.scatter().multiply(scatterEnvelope);
-                double phase = flying.phase();
-                Vec3d phaseOffset = new Vec3d(Math.cos(phase + progress * Math.PI * 2) * scatter.x,
-                        0, Math.sin(phase + progress * Math.PI * 2) * scatter.z);
-                position = flying.start().lerp(flying.target(), progress).add(phaseOffset.x, arc, phaseOffset.z);
-            }
+            Vec3d position = remaining <= flying.snapTicks() ? flying.motion().target() : flying.motion().positionAt(elapsed);
+            Vec3d previous = elapsed <= 0 ? flying.motion().start() : flying.motion().positionAt(elapsed - 1);
             flying.entity().setOnGround(false);
             flying.entity().setNoGravity(true);
-            flying.entity().setVelocity(Vec3d.ZERO);
+            flying.entity().setVelocity(position.subtract(previous));
             flying.entity().refreshPositionAndAngles(position.x, position.y, position.z, 0, 0);
             flying.entity().updateTrackedPosition(position.x, position.y, position.z);
             totalEntityPositionUpdates++;
             if (progress >= 1.0) {
                 flying.entity().discard();
-                if (flying.commit() && flying.pixel() != null) pendingCommits.addLast(new PendingPixel(flying.pixel(), null, -1));
+                if (flying.commit() && flying.pixel() != null) pendingCommits.addLast(PendingPixel.forCommit(flying.pixel()));
                 finished.add(flying);
             }
         }
         activeDisplays.removeAll(finished);
     }
 
-    private void setDisplayTranslation(Entity entity, Vec3d translation, int pixelScale) {
+    private boolean outsideMotionBounds(Vec3d position, MotionPath motion) {
+        if (position == null || !Double.isFinite(position.x) || !Double.isFinite(position.y) || !Double.isFinite(position.z)) {
+            return true;
+        }
+        Vec3d start = motion.start();
+        Vec3d target = motion.target();
+        return Math.abs(position.x - start.x) > 512 || Math.abs(position.x - target.x) > 512
+                || Math.abs(position.y - start.y) > 512 || Math.abs(position.y - target.y) > 512
+                || Math.abs(position.z - start.z) > 512 || Math.abs(position.z - target.z) > 512;
+    }
+
+    private void setDisplayTranslation(Entity entity, BlockState state, Vec3d translation, int pixelScale, int duration) {
         if (!(entity instanceof DisplayEntity display)) return;
-        applyDisplayNbt(display, null, translation, pixelScale, 2);
+        applyDisplayNbt(display, state, translation, pixelScale, Math.max(1, duration));
     }
 
     private void applyDisplayNbt(DisplayEntity display, BlockState state, Vec3d translation, int scale, int duration) {
         NbtCompound nbt = new NbtCompound();
-        if (state != null) nbt.put("block_state", NbtHelper.fromBlockState(state));
+        // DisplayEntity.readNbt delegates BlockDisplayEntity's block_state
+        // decoder. Omitting this field resets the payload to air, so every
+        // interpolation update must carry the complete payload state.
+        nbt.put("block_state", NbtHelper.fromBlockState(state));
         NbtCompound transformation = new NbtCompound();
         transformation.put("translation", floats(translation.x, translation.y, translation.z));
         transformation.put("scale", floats(scale, scale, scale));
@@ -619,6 +770,12 @@ public final class ShowManager {
         nbt.put("transformation", transformation);
         nbt.putInt("interpolation_duration", duration);
         nbt.putInt("start_interpolation", 0);
+        // The default view range is only 64 blocks. A 256x256 canvas can be
+        // farther away than that, which otherwise makes the flight appear to
+        // disappear even though the entity is alive on the server.
+        nbt.putFloat("view_range", 8.0f);
+        nbt.putFloat("width", Math.max(1, scale));
+        nbt.putFloat("height", Math.max(1, scale));
         display.readNbt(nbt);
     }
 
@@ -665,9 +822,16 @@ public final class ShowManager {
         activeDisplays.clear();
     }
 
-    private record PendingPixel(Pixel pixel, NoteEvent event, int eventIndex) {}
-    private record FlyingPixel(Entity entity, Pixel pixel, Vec3d start, Vec3d mid, Vec3d target, long startTick,
-                                long durationTicks, double arcHeight, Vec3d scatter, double phase,
-                                int snapTicks, boolean commit, boolean displayMode) {}
+    private record PendingPixel(Pixel pixel, NoteEvent event, int eventIndex, int sourceNote,
+                                BlockPos sourceKeyBlock, Vec3d launchPosition) {
+        private static PendingPixel forCommit(Pixel pixel) {
+            return new PendingPixel(pixel, null, -1, -1, null, null);
+        }
+    }
+    private record FlyingPixel(Entity entity, BlockState state, Pixel pixel, int sourceEventIndex, int sourceNote,
+                               BlockPos sourceKeyBlock, MotionPath motion, long startTick,
+                                long durationTicks,
+                                int snapTicks, boolean commit, boolean displayMode,
+                                boolean vanillaPhysics, Vec3d initialVelocity, long maxLifetimeTicks) {}
     private record StageBlock(BlockPos position, BlockState state) {}
 }

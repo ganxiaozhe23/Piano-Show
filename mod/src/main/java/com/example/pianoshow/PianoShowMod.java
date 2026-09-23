@@ -8,10 +8,12 @@ import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
+import net.fabricmc.fabric.api.itemgroup.v1.ItemGroupEvents;
 import net.minecraft.block.AbstractBlock;
 import net.minecraft.block.Block;
 import net.minecraft.item.BlockItem;
 import net.minecraft.item.Item;
+import net.minecraft.item.ItemGroups;
 import net.minecraft.registry.Registries;
 import net.minecraft.registry.Registry;
 import net.minecraft.server.command.CommandManager;
@@ -45,13 +47,20 @@ public final class PianoShowMod implements ModInitializer {
             Identifier.of(MOD_ID, "fallback_pixel"),
             new BlockItem(FALLBACK_BLOCK, new Item.Settings())
     );
+    public static final Item STAGE_PLACER_ITEM = Registry.register(
+            Registries.ITEM,
+            Identifier.of(MOD_ID, "stage_placer"),
+            new PianoStagePlacerItem(new Item.Settings())
+    );
 
     static final ShowManager SHOW_MANAGER = new ShowManager();
 
     @Override
     public void onInitialize() {
         ServerLifecycleEvents.SERVER_STARTED.register(SHOW_MANAGER::attach);
+        ItemGroupEvents.modifyEntriesEvent(ItemGroups.TOOLS).register(entries -> entries.add(STAGE_PLACER_ITEM));
         UseBlockCallback.EVENT.register((player, world, hand, hit) -> {
+            if (player.getStackInHand(hand).isOf(STAGE_PLACER_ITEM)) return net.minecraft.util.ActionResult.PASS;
             if (!world.isClient && world instanceof net.minecraft.server.world.ServerWorld serverWorld && world.getBlockState(hit.getBlockPos()).isOf(PIANO_KEY)) {
                 int note = world.getBlockState(hit.getBlockPos()).get(PianoKeyBlock.NOTE);
                 SHOW_MANAGER.manualNote(serverWorld, hit.getBlockPos(), note);
@@ -131,6 +140,10 @@ public final class PianoShowMod implements ModInitializer {
                                     context.getSource().sendFeedback(() -> Text.literal(SHOW_MANAGER.performanceSummary()), false);
                                     return 1;
                                 }))
+                                .then(CommandManager.literal("layout").executes(context -> {
+                                    context.getSource().sendFeedback(() -> Text.literal(SHOW_MANAGER.layoutSummary()), false);
+                                    return 1;
+                                }))
                                 .then(CommandManager.literal("clear_entities").executes(context -> {
                                     int count = SHOW_MANAGER.clearFallingEntities();
                                     context.getSource().sendFeedback(() -> Text.literal("Cleared " + count + " falling block entities"), true);
@@ -166,8 +179,8 @@ public final class PianoShowMod implements ModInitializer {
     private static int build(ServerCommandSource source, BlockPos position) {
         try {
             if (!SHOW_MANAGER.isLoaded()) throw new IllegalStateException("load a show first");
-            SHOW_MANAGER.buildKeyboard(source.getWorld(), position, 21, 108);
-            source.sendFeedback(() -> Text.literal("Built 88-key piano at " + position.toShortString()), true);
+            SHOW_MANAGER.buildKeyboard(source.getWorld(), position);
+            source.sendFeedback(() -> Text.literal("Built piano stage at " + position.toShortString()), true);
             return 1;
         } catch (Exception exception) {
             source.sendError(Text.literal("Unable to build piano: " + exception.getMessage()));

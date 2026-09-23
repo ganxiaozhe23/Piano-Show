@@ -125,6 +125,9 @@ public final class ShowPackage {
     public List<PaletteEntry> palette() { return palette; }
     public int imageWidth() { return manifest.get("imageWidth").getAsInt(); }
     public int imageHeight() { return manifest.get("imageHeight").getAsInt(); }
+    /** Logical image dimensions, with v1 packages falling back to imageWidth/imageHeight. */
+    public int logicalWidth() { return manifest.has("logicalWidth") ? manifest.get("logicalWidth").getAsInt() : imageWidth(); }
+    public int logicalHeight() { return manifest.has("logicalHeight") ? manifest.get("logicalHeight").getAsInt() : imageHeight(); }
     public int formatVersion() { return manifest.has("formatVersion") ? manifest.get("formatVersion").getAsInt() : 1; }
     public int pixelScale() {
         JsonObject canvas = layout.has("canvas") && layout.get("canvas").isJsonObject()
@@ -134,8 +137,33 @@ public final class ShowPackage {
     }
     public int physicalWidth() { return manifest.has("physicalWidth") ? manifest.get("physicalWidth").getAsInt() : imageWidth() * pixelScale(); }
     public int physicalHeight() { return manifest.has("physicalHeight") ? manifest.get("physicalHeight").getAsInt() : imageHeight() * pixelScale(); }
+    public int estimatedBlockCount() {
+        return manifest.has("estimatedBlockCount")
+                ? Math.max(0, manifest.get("estimatedBlockCount").getAsInt())
+                : pixels.size() * pixelScale() * pixelScale();
+    }
     public String visualMode() { return manifest.has("visualMode") ? manifest.get("visualMode").getAsString() : "physical"; }
     public String timingMode() { return manifest.has("timingMode") ? manifest.get("timingMode").getAsString() : "fixed"; }
+    public String motionMode() {
+        if (!manifest.has("motionMode")) return "arc";
+        String value = manifest.get("motionMode").getAsString();
+        return value.equals("ballistic") || value.equals("vanilla") ? value : "arc";
+    }
+    public double motionGravity() {
+        if (!manifest.has("motionGravity")) return 0.04;
+        double value = manifest.get("motionGravity").getAsDouble();
+        return Double.isFinite(value) ? Math.max(0.0, Math.min(1.0, value)) : 0.04;
+    }
+    public double motionDrag() {
+        if (!manifest.has("motionDrag")) return 0.98;
+        double value = manifest.get("motionDrag").getAsDouble();
+        return Double.isFinite(value) ? Math.max(0.0, Math.min(1.0, value)) : 0.98;
+    }
+    public double motionArcHeight() {
+        if (!manifest.has("motionArcHeight")) return 1.5;
+        double value = manifest.get("motionArcHeight").getAsDouble();
+        return Double.isFinite(value) && value >= 0.0 ? value : 1.5;
+    }
     private JsonObject effectLimits() {
         return manifest.has("effectLimits") && manifest.get("effectLimits").isJsonObject()
                 ? manifest.getAsJsonObject("effectLimits") : new JsonObject();

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import json
+import hashlib
 import re
 import subprocess
 import tempfile
@@ -29,7 +30,7 @@ class DebugRunner:
         self.state: dict[str, Any] = {
             "status": "idle", "pid": None, "startedAt": None, "showFile": None,
             "showId": None, "command": "gradlew.bat runClient", "exitCode": None,
-            "logCursor": 0, "instructions": [], "error": None,
+            "logCursor": 0, "instructions": [], "error": None, "projectHash": None,
         }
         self._restore_managed_process()
 
@@ -106,13 +107,31 @@ class DebugRunner:
             return dict(self.state)
 
     def launch(self, project_bytes: bytes) -> dict[str, Any]:
+        request_hash = hashlib.sha256(project_bytes).hexdigest()
         with self.lock:
+            # A preparation/startup section has no Popen handle yet, so the
+            # regular ``_active`` check alone would allow a second request to
+            # race and launch another client. Treat the transitional states as
+            # owned by the in-flight launch as well.
+            if self.state.get("status") in {"preparing", "starting"}:
+                result = dict(self.state)
+                if self.state.get("projectHash") and self.state.get("projectHash") != request_hash:
+                    result["conflict"] = True
+                    result["error"] = "已有调试工程正在启动，本次工程尚未加载。"
+                    return result
+                result["reused"] = True
+                result["message"] = "Minecraft 调试实例正在启动，已复用现有启动流程。"
+                return result
             if self._active():
                 result = dict(self.state)
+                if self.state.get("projectHash") and self.state.get("projectHash") != request_hash:
+                    result["conflict"] = True
+                    result["error"] = "已有调试实例正在运行，本次工程尚未加载。"
+                    return result
                 result["reused"] = True
                 result["message"] = "已有 Minecraft 调试实例正在运行，已复用现有实例。"
                 return result
-            self.state.update({"status": "preparing", "error": None, "exitCode": None})
+            self.state.update({"status": "preparing", "error": None, "exitCode": None, "projectHash": request_hash})
         try:
             state = read_project(project_bytes)
             project = state["project"]
@@ -124,8 +143,13 @@ class DebugRunner:
                 compiled = compile_project_state(state, temporary_show)
                 target = show_dir / f"{name}.pshow"
                 temporary_target = show_dir / f".{name}.pshow.tmp"
-                temporary_target.write_bytes(temporary_show.read_bytes())
-                temporary_target.replace(target)
+                try:
+                    temporary_target.write_bytes(temporary_show.read_bytes())
+                    temporary_target.replace(target)
+                finally:
+                    # A failed write/replace must not leave a half-written
+                    # package that the next Minecraft launch could discover.
+                    temporary_target.unlink(missing_ok=True)
             java_home = self._java_home()
             env = os.environ.copy()
             env["JAVA_HOME"] = str(java_home)
@@ -133,24 +157,31 @@ class DebugRunner:
             gradle = self.mod_dir / ("gradlew.bat" if os.name == "nt" else "gradlew")
             if not gradle.is_file():
                 raise RuntimeError(f"找不到 Gradle wrapper: {gradle}")
+            # Keep the lock through Popen so a simultaneous Stop cannot land
+            # between the ``starting`` state and process registration.
             with self.lock:
+                if self.state.get("status") == "stopped":
+                    return dict(self.state)
+                origin = compiled.manifest.get("origin", [0, 64, 0])
+                if not isinstance(origin, (list, tuple)) or len(origin) != 3:
+                    origin = [0, 64, 0]
+                build_command = "/piano build " + " ".join(str(int(value)) for value in origin)
                 self.state.update({
                     "status": "starting", "showFile": target.name,
                     "showId": compiled.manifest.get("showId"),
                     "startedAt": datetime.now(timezone.utc).isoformat(),
-                    "instructions": [f"/piano load {target.name}", "/piano build 0 64 0", "/piano preview", "/piano play"],
+                    "instructions": [f"/piano load {target.name}", build_command, "/piano preview", "/piano play"],
                 })
-            creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-            process = subprocess.Popen(
-                [str(gradle), "runClient"], cwd=self.mod_dir, env=env,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                encoding="utf-8", errors="replace", bufsize=1, creationflags=creationflags,
-            )
-            with self.lock:
+                creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                process = subprocess.Popen(
+                    [str(gradle), "runClient"], cwd=self.mod_dir, env=env,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                    encoding="utf-8", errors="replace", bufsize=1, creationflags=creationflags,
+                )
                 self.process = process
                 self.state.update({"status": "running", "pid": process.pid})
                 self.pid_file.parent.mkdir(parents=True, exist_ok=True)
-                self.pid_file.write_text(json.dumps({"pid": process.pid, "status": "running", "showFile": self.state["showFile"], "showId": self.state["showId"], "startedAt": self.state["startedAt"], "instructions": self.state["instructions"]}), encoding="utf-8")
+                self.pid_file.write_text(json.dumps({"pid": process.pid, "status": "running", "projectHash": self.state["projectHash"], "showFile": self.state["showFile"], "showId": self.state["showId"], "startedAt": self.state["startedAt"], "instructions": self.state["instructions"]}), encoding="utf-8")
             threading.Thread(target=self._reader, args=(process,), daemon=True, name="piano-show-debug-log").start()
             return self.status()
         except Exception as error:
@@ -168,7 +199,7 @@ class DebugRunner:
             process = self.process
             recovered_pid = int(self.state["pid"]) if process is None and self.state.get("pid") else None
             if process is None and recovered_pid is None:
-                if self.state["status"] in {"running", "starting"}:
+                if self.state["status"] in {"running", "starting", "preparing"}:
                     self.state["status"] = "stopped"
                 return dict(self.state)
             if process is not None and process.poll() is not None:

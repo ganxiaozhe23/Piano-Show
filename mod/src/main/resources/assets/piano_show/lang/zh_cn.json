@@ -1,4 +1,5 @@
 {
   "block.piano_show.piano_key": "钢琴键",
-  "block.piano_show.fallback_pixel": "备用像素方块"
+  "block.piano_show.fallback_pixel": "备用像素方块",
+  "item.piano_show.stage_placer": "钢琴舞台放置器"
 }

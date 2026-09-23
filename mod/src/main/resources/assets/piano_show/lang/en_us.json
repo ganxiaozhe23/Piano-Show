@@ -1,4 +1,5 @@
 {
   "block.piano_show.piano_key": "Piano Key",
-  "block.piano_show.fallback_pixel": "Fallback Pixel"
+  "block.piano_show.fallback_pixel": "Fallback Pixel",
+  "item.piano_show.stage_placer": "Piano Stage Placer"
 }

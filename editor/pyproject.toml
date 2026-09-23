@@ -19,5 +19,8 @@ test = ["pytest>=8.0"]
 [project.scripts]
 piano-show = "piano_show.cli:main"
 
+[tool.setuptools.package-data]
+piano_show = ["web/*.html", "web/*.css", "web/*.js", "web/vendor/*.js"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

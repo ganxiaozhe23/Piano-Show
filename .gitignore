@@ -7,4 +7,18 @@ mod/.gradle/
 mod/build/
 mod/run/
 mod/run-*.log
+
+# Minecraft runtime & world saves (never commit)
+mod/run/saves/
+mod/run/logs/
+mod/run/mods/
+mod/run/downloads/
+mod/run/resourcepacks/
+mod/run/resources/
+*.mca
+*.mcr
+*.dat_old
+session.lock
+
+# Configs & generated shows
 config/piano-shows/*.pshow

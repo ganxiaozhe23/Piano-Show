@@ -15,6 +15,12 @@ python -m pip install -e .
 piano-show import --midi song.mid --image image.png --out show.pshow --resolution 128 --orientation wall_north --pixel-scale 2
 ```
 
+画布位置可在现有原点和 `canvas-gap` 基础上追加三轴偏移（范围 `-128..128`）；图片旋转支持 90° 步进：
+
+```powershell
+piano-show import --midi song.mid --image image.png --out show.pshow --orientation wall_north --canvas-gap 8 --canvas-offset 0 4 -2 --image-rotation 90
+```
+
 也可以直接运行模块：
 
 ```powershell
@@ -37,7 +43,9 @@ piano-show preview --show show.pshow --open
 piano-show editor
 ```
 
-编辑器中的“启动 Minecraft 调试”会编译当前 `.pwork`、复制 v2 `.pshow` 到 `mod/run/config/piano-shows`，并启动 Fabric `runClient`。游戏内仍需手动执行页面显示的 `/piano load`、`/piano build` 和 `/piano play` 命令。
+也可以直接双击项目根目录的 [`start-editor.bat`](D:/01_projects/Minecraft/start-editor.bat)，它会自动选择 Python 环境、启动本地编辑器并打开浏览器。
+
+编辑器中的“新建工程”可创建空白 `.pwork`，然后使用“导入 MIDI”“导入图片”填充素材；“保存 .pwork”可下载工程。“启动 Minecraft 调试”会编译当前工程、复制 v2 `.pshow` 到 `mod/run/config/piano-shows`，并启动 Fabric `runClient`。游戏内仍需手动执行页面显示的 `/piano load`、`/piano build` 和 `/piano play` 命令。
 
 如果还没有 `.pwork` 工程，可先创建一个：
 
@@ -46,6 +54,10 @@ piano-show project --midi song.mid --image image.png --out demo.pwork --name dem
 ```
 
 编辑器现在提供本地调试控制：打开 `piano-show editor` 后选择 `.pwork`，点击“启动 Minecraft 调试”。它会自动编译并复制演出包、启动或复用 Fabric 开发客户端，并在右侧显示日志。进入游戏后按面板提示执行命令；点击“停止调试”只停止当前客户端，不删除世界和日志。
+
+Web 编辑器左侧“编排参数”中的偏移 X/Y/Z 会立即同步 2D/3D 预览；“图像旋转”按钮只修改编排参数，原始图片保持不变，可通过撤销/重做恢复。
+
+Motion 轨迹可在编排参数中选择 `arc`、`ballistic` 或 `vanilla`。`arc` 的弧高为有限非负浮点数，不再设置人为上限；`ballistic` 使用服务端预测的 20 TPS 重力/阻力离散积分；`vanilla` 仅在 `visualMode=physical` 下启用 Minecraft 原生 FallingBlockEntity `Motion:[vx,vy,vz]`、重力与碰撞，落地后由服务端精确提交目标方块。三种模式都使用与 Mod 相同的 floor/墙面坐标基和对应琴键发射点。`floor` 工程可通过 `/piano build` 或舞台放置器生成水平画布。
 
 ## Mod 开发
 
@@ -64,6 +76,15 @@ gradle build
 /piano preview
 /piano play
 ```
+
+也可以使用新增的钢琴舞台放置器免手动输入坐标：
+
+```text
+/give @s piano_show:stage_placer
+/piano load show.pshow
+```
+
+手持放置器右键任意方块顶面，点击方块上方一格会作为钢琴原点；物品不消耗。放置器会跟随已加载工程的 `surface`（包括 `floor`）生成舞台。放置完成后执行 `/piano play`，再次移动舞台前先停止当前演出。
 
 调试飞行实体和落点：
 

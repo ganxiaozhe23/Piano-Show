@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Piano Show 编辑器</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="toolbar">
+    <div class="brand">Piano Show <small>V2 Editor</small></div>
+    <button id="newProject">新建</button><button id="openProject">打开</button>
+    <input id="projectFile" type="file" accept=".pwork" hidden>
+    <button id="saveProject" disabled>保存 .pwork</button>
+    <button id="importMidi">导入 MIDI</button><input id="midiFile" type="file" accept=".mid,.midi" hidden>
+    <button id="importImage">导入图片</button><input id="imageFile" type="file" accept=".png,.jpg,.jpeg,.webp" hidden>
+    <span class="separator"></span>
+    <button id="undo" disabled>撤销</button><button id="redo" disabled>重做</button>
+    <button id="compilePreview" disabled>编译预览</button><button id="exportShow" disabled>导出 .pshow</button>
+    <button id="launchDebug" disabled>启动 Minecraft 调试</button><button id="stopDebug" class="danger" disabled>停止</button>
+    <span id="compileState" class="state-pill">未加载工程</span>
+  </header>
+  <div class="workspace">
+    <aside class="sidebar left">
+      <section><h2>工程</h2><div id="projectInfo" class="muted">新建或打开一个 .pwork 工程</div></section>
+      <section><h2>视图</h2><div class="view-tabs"><button data-view="stage2d" class="active">2D 像素</button><button data-view="roll">Piano Roll</button><button data-view="stage3d">3D 舞台</button></div></section>
+      <section><h2>像素工具</h2>
+        <div id="pixelTools" class="tool-grid"><button data-tool="brush" class="active">画笔</button><button data-tool="eraser">橡皮</button><button data-tool="picker">吸管</button><button data-tool="fill">填充</button><button data-tool="rect">矩形</button><button data-tool="line">线条</button><button data-tool="select">框选</button></div>
+        <label class="check"><input id="gridToggle" type="checkbox" checked> 显示网格</label>
+        <label>画笔颜色 <select id="paletteSelect"></select></label>
+        <div id="paletteSwatches" class="swatches"></div>
+        <div class="rotation-tools"><span>图像旋转：<strong id="rotationLabel">0°</strong></span><button id="rotateLeft" type="button">↶ 左 90°</button><button id="rotateRight" type="button">↷ 右 90°</button><button id="resetRotation" type="button">重置</button></div>
+      </section>
+      <section><h2>编排参数</h2><div id="optionsForm" class="options-form"></div><div id="canvasPositionInfo" class="muted canvas-position-info"></div></section>
+      <section><h2>统计</h2><div id="metrics"></div></section>
+      <section><h2>Piano Roll 网格</h2><label>吸附 <select id="snapSelect"><option value="1">1 tick</option><option value="2">2 tick</option><option value="4">4 tick</option><option value="8">8 tick</option><option value="16">16 tick</option></select></label></section>
+    </aside>
+    <main class="stage-area">
+      <div class="stage-toolbar"><span id="viewTitle">2D 像素画</span><span class="spacer"></span><button id="fitView">适应视图</button><button id="resetView">重置视图</button></div>
+      <div id="stage2dView" class="view-pane active"><canvas id="pixelCanvas"></canvas><div id="pixelHint" class="empty-hint">导入图片后即可编辑像素画</div></div>
+      <div id="rollView" class="view-pane"><canvas id="rollCanvas"></canvas><div id="rollHint" class="empty-hint">导入 MIDI 后编辑音符</div></div>
+      <div id="stage3dView" class="view-pane"><canvas id="stage3dCanvas"></canvas><div id="stage3dHint" class="empty-hint">编译预览后显示舞台</div></div>
+      <div class="transport"><button id="play">▶ 播放</button><button id="pause">Ⅱ 暂停</button><button id="stopPlayback">■ 停止</button><button id="mute">🔊</button><label>速度 <input id="speed" type="range" min="0.25" max="4" step="0.25" value="1"><span id="speedLabel">1.00×</span></label><span id="tickLabel">tick 0</span><input id="timeline" type="range" min="0" max="1" value="0"></div>
+    </main>
+    <aside class="sidebar right">
+      <section><h2>检查器</h2><div id="inspector" class="inspector muted">选择一个像素或音符</div></section>
+      <section><h2>调试面板</h2><div id="debugStatus" class="state-pill">idle</div><div class="debug-meta" id="debugMeta"></div><pre id="debugLogs">等待启动…</pre><div class="debug-actions"><button id="copyLogs">复制日志</button><button id="stopDebugSide" class="danger" disabled>停止</button></div><div id="debugCommands" class="commands"></div></section>
+      <section><h2>快捷键</h2><p class="muted">Ctrl/Cmd+Z 撤销，Ctrl/Cmd+Y 重做。Piano Roll 双击新增音符，Delete 删除选中项。空格播放/暂停。</p></section>
+    </aside>
+  </div>
+  <div id="toast" class="toast"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

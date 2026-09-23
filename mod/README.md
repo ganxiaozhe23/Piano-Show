@@ -21,6 +21,6 @@ Commands (permission level 2):
 /piano debug clear_entities
 ```
 
-The runtime keeps the server authoritative. v2 packages use client-interpolated `BlockDisplayEntity` payloads by default, while `visualMode=physical` and legacy v1 packages retain the `FallingBlockEntity` fallback. Adaptive timing uses note density and queue backlog to keep the show responsive; if any payload disappears early, it is queued for an exact-position commit so the final image is not lost. `/piano restore` restores blocks overwritten during the current loaded show.
+The runtime keeps the server authoritative. v2 packages use client-interpolated `BlockDisplayEntity` payloads by default. `visualMode=physical` retains the manual arc/ballistic fallback and can opt into `motionMode=vanilla` for native `FallingBlockEntity` `Motion:[vx,vy,vz]`, gravity, drag and collision; every physical payload is still committed once at its exact target so an early collision cannot lose image pixels. Arc height accepts any finite non-negative value. Adaptive timing uses note density and queue backlog to keep the show responsive. `/piano restore` restores blocks overwritten during the current loaded show.
 
 `/piano build` creates a complete 88-key black/white keyboard, a scaled backing canvas and a border. New packages default to a vertical `wall_north` canvas with `pixelScale=2`; use `/piano preview` after the stage has finished building to inspect logical/physical dimensions and queue state.

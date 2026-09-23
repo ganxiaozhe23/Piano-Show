@@ -105,3 +105,139 @@ def test_new_cli_defaults_to_floor_stage_layout() -> None:
     assert args.orientation == "wall_north"
     assert args.canvas_gap == 8
     assert args.keyboard_depth == 4
+
+
+def test_rotation_and_canvas_offset_are_encoded_deterministically(tmp_path: Path) -> None:
+    midi_path = tmp_path / "song.mid"
+    image_path = tmp_path / "image.png"
+    make_midi(midi_path)
+    image = Image.new("RGBA", (2, 2))
+    image.putpixel((0, 0), (255, 0, 0, 255))
+    image.putpixel((1, 0), (0, 255, 0, 255))
+    image.putpixel((0, 1), (0, 0, 255, 255))
+    image.putpixel((1, 1), (255, 255, 0, 255))
+    image.save(image_path)
+    options = CompileOptions(resolution=2, image_rotation=90, canvas_offset=(1, 2, 3))
+    first = compile_show(midi_path, image_path, options)
+    second = compile_show(midi_path, image_path, options)
+    assert first.manifest["showId"] == second.manifest["showId"]
+    assert first.manifest["imageRotation"] == 90
+    assert first.manifest["canvasOffset"] == [1, 2, 3]
+    assert first.layout["canvas"]["positionOffset"] == [1, 2, 3]
+    assert first.layout["canvas"]["anchor"] == [1, 71, -5]
+    assert [(p.x, p.y, p.palette_index) for p in first.pixels] == [(p.x, p.y, p.palette_index) for p in second.pixels]
+    base_pixels, _, _, _ = compile_image(image_path, 2, list(DEFAULT_PALETTE), image_rotation=0)
+    pixels, _, _, _ = compile_image(image_path, 2, list(DEFAULT_PALETTE), image_rotation=90)
+    base = {(p.x, p.y): p.palette_index for p in base_pixels}
+    rotated = {(p.x, p.y): p.palette_index for p in pixels}
+    assert rotated[(1, 0)] == base[(0, 0)]  # red moves from (0, 0) to (1, 0)
+
+
+def test_invalid_rotation_and_canvas_offset_are_rejected(tmp_path: Path) -> None:
+    midi_path = tmp_path / "song.mid"
+    image_path = tmp_path / "image.png"
+    make_midi(midi_path)
+    Image.new("RGBA", (2, 2), (255, 0, 0, 255)).save(image_path)
+    import pytest
+    with pytest.raises(ValueError, match="image_rotation"):
+        compile_show(midi_path, image_path, CompileOptions(resolution=2, image_rotation=45))
+    with pytest.raises(ValueError, match="canvas_offset"):
+        compile_show(midi_path, image_path, CompileOptions(resolution=2, canvas_offset=(129, 0, 0)))
+
+
+def test_canvas_anchor_applies_offset_for_every_surface(tmp_path: Path) -> None:
+    midi_path = tmp_path / "song.mid"
+    image_path = tmp_path / "image.png"
+    make_midi(midi_path)
+    Image.new("RGBA", (2, 2), (255, 0, 0, 255)).save(image_path)
+    expected = {
+        "floor": [2, 68, 15],
+        "wall_north": [2, 68, -5],
+        "wall_south": [2, 68, 15],
+        "wall_east": [114, 68, 3],
+        "wall_west": [-6, 68, 3],
+    }
+    for surface, anchor in expected.items():
+        compiled = compile_show(
+            midi_path,
+            image_path,
+            CompileOptions(
+                resolution=2,
+                pixel_scale=1,
+                canvas_lift=0,
+                canvas_gap=8,
+                canvas_offset=(2, 3, 3),
+                surface=surface,
+                orientation=surface,
+            ),
+        )
+        assert compiled.layout["canvas"]["anchor"] == anchor
+
+
+def test_motion_options_are_encoded_and_change_hash(tmp_path: Path) -> None:
+    midi_path = tmp_path / "song.mid"
+    image_path = tmp_path / "image.png"
+    make_midi(midi_path)
+    Image.new("RGBA", (2, 2), (255, 0, 0, 255)).save(image_path)
+    arc = compile_show(midi_path, image_path, CompileOptions(resolution=2, motion_mode="arc"))
+    ballistic = compile_show(midi_path, image_path, CompileOptions(
+        resolution=2, surface="floor", orientation="floor", motion_mode="ballistic",
+        motion_gravity=0.04, motion_drag=0.98, motion_arc_height=3.0,
+    ))
+    assert arc.manifest["motionMode"] == "arc"
+    assert ballistic.manifest["motionMode"] == "ballistic"
+    assert ballistic.manifest["motionGravity"] == 0.04
+    assert ballistic.manifest["motionDrag"] == 0.98
+    assert ballistic.manifest["motionArcHeight"] == 3.0
+    assert arc.manifest["showId"] != ballistic.manifest["showId"]
+    assert ballistic.layout["canvas"]["surface"] == "floor"
+
+
+def test_motion_options_are_validated(tmp_path: Path) -> None:
+    midi_path = tmp_path / "song.mid"
+    image_path = tmp_path / "image.png"
+    make_midi(midi_path)
+    Image.new("RGBA", (2, 2), (255, 0, 0, 255)).save(image_path)
+    import pytest
+    with pytest.raises(ValueError, match="motion_mode"):
+        compile_show(midi_path, image_path, CompileOptions(resolution=2, motion_mode="bad"))
+    with pytest.raises(ValueError, match="motion_gravity"):
+        compile_show(midi_path, image_path, CompileOptions(resolution=2, motion_gravity=2))
+    with pytest.raises(ValueError, match="motion_drag"):
+        compile_show(midi_path, image_path, CompileOptions(resolution=2, motion_drag=-1))
+    with pytest.raises(ValueError, match="motion_arc_height"):
+        compile_show(midi_path, image_path, CompileOptions(resolution=2, motion_arc_height=-1))
+
+
+def test_arc_height_has_no_artificial_upper_bound(tmp_path: Path) -> None:
+    midi_path = tmp_path / "song.mid"
+    image_path = tmp_path / "image.png"
+    make_midi(midi_path)
+    Image.new("RGBA", (2, 2), (255, 0, 0, 255)).save(image_path)
+    heights = (33.0, 128.0, 1024.5)
+    compiled = [compile_show(midi_path, image_path, CompileOptions(resolution=2, motion_arc_height=value)) for value in heights]
+    assert [item.manifest["motionArcHeight"] for item in compiled] == list(heights)
+    assert len({item.manifest["showId"] for item in compiled}) == len(heights)
+    import pytest
+    for invalid in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(ValueError, match="motion_arc_height"):
+            compile_show(midi_path, image_path, CompileOptions(resolution=2, motion_arc_height=invalid))
+
+
+def test_vanilla_motion_requires_physical_and_is_encoded(tmp_path: Path) -> None:
+    midi_path = tmp_path / "song.mid"
+    image_path = tmp_path / "image.png"
+    make_midi(midi_path)
+    Image.new("RGBA", (2, 2), (255, 0, 0, 255)).save(image_path)
+    import pytest
+    with pytest.raises(ValueError, match="requires visual_mode=physical"):
+        compile_show(midi_path, image_path, CompileOptions(resolution=2, motion_mode="vanilla"))
+    compiled = compile_show(
+        midi_path,
+        image_path,
+        CompileOptions(resolution=2, surface="floor", orientation="floor", visual_mode="physical", motion_mode="vanilla"),
+    )
+    assert compiled.manifest["motionMode"] == "vanilla"
+    assert compiled.manifest["motionGravity"] == 0.04
+    assert compiled.manifest["motionDrag"] == 0.98
+    assert compiled.layout["canvas"]["surface"] == "floor"

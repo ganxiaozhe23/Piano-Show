@@ -29,7 +29,8 @@ aside{padding:18px;background:#111522;border-left:1px solid #293148;overflow:aut
 <label>Timeline <span id="tickLabel">0</span></label><input id="timeline" type="range" min="0" max="1" value="0">
 <label>Speed <span id="speedLabel">1.0×</span></label><input id="speed" type="range" min="0.25" max="4" value="1" step="0.25">
 <label>Zoom</label><input id="zoom" type="range" min="0.35" max="2.5" value="1" step="0.05">
-<label>Mode</label><select id="mode"><option value="display">Display (smooth)</option><option value="physical">Physical (arc)</option></select>
+<label>Mode</label><select id="mode"><option value="display">Display (smooth)</option><option value="physical">Physical</option></select>
+<label>Motion</label><select id="motion"><option value="arc">Arc</option><option value="ballistic">Ballistic</option><option value="vanilla">Vanilla Motion (predicted)</option></select>
 <div id="stats"></div><div class="hint">This local preview contains only compiled timing, pixels and palette data. No source files leave your machine.</div>
 </aside></div><script>
 const DATA=__DATA__;
@@ -37,23 +38,31 @@ const canvas=document.querySelector('#view'),ctx=canvas.getContext('2d');
 const timeline=document.querySelector('#timeline'),tickLabel=document.querySelector('#tickLabel'),stats=document.querySelector('#stats');
 const events=DATA.events||[], pixels=DATA.pixels||[], manifest=DATA.manifest||{}, layout=DATA.layout||{};
 const scale=Number(layout.canvas?.pixelScale||manifest.pixelScale||2), width=Number(manifest.logicalWidth||manifest.imageWidth||1), height=Number(manifest.logicalHeight||manifest.imageHeight||1);
+const surface=layout.canvas?.surface||manifest.surface||'wall_north', configuredMotionMode=manifest.motionMode||'arc', motionGravity=Number(manifest.motionGravity??.04), motionDrag=Number(manifest.motionDrag??.98), motionArcHeight=Number(manifest.motionArcHeight??1.5);
+const noteMin=Number(manifest.noteMin??layout.keyboard?.noteMin??21), noteMax=Number(manifest.noteMax??layout.keyboard?.noteMax??108);
+const blackNotes=new Set([1,3,6,8,10]);
+function isBlack(note){return blackNotes.has(((Math.floor(note)%12)+12)%12)}
+function whiteIndex(note){let count=0;for(let n=noteMin;n<note;n++)if(!isBlack(n))count++;return count}
+function keyboardSource(note){const black=isBlack(note), keyX=whiteIndex(note)*2+(black?1:0)+(black ? 0.5 : 1);return [keyX,height*scale+8,0]}
 const firstTick=events.length?events[0][0]:0,lastTick=events.length?events[events.length-1][0]:1, endTick=Math.max(lastTick+80,firstTick+1);
 timeline.max=endTick; timeline.value=firstTick;
-let tick=firstTick,playing=false,lastTime=performance.now(),speed=1,zoom=1;
+let tick=firstTick,playing=false,lastTime=performance.now(),speed=1,zoom=1,motionMode=configuredMotionMode;
+document.querySelector('#motion').value=motionMode;
 function resize(){const dpr=devicePixelRatio||1;canvas.width=canvas.clientWidth*dpr;canvas.height=canvas.clientHeight*dpr;ctx.setTransform(dpr,0,0,dpr,0,0)}
 addEventListener('resize',resize);resize();
 function project(x,y){const s=Math.min(canvas.clientWidth/(width*scale+40),canvas.clientHeight/(height*scale+70))*zoom;return [canvas.clientWidth/2+(x-width*scale/2)*s,canvas.clientHeight/2+(height*scale/2-y)*s]}
+function motionPoint(start,target,t){const env=Math.sin(Math.PI*t);if(motionMode==='ballistic'||motionMode==='vanilla'){const d=Math.max(0,Math.min(1,motionDrag)),g=Math.max(0,Math.min(1,motionGravity)),n=Math.max(1,Math.round(endTick-firstTick)),sum=d===1?n:(1-Math.pow(d,n))/(1-d);let gd=0,v=0;for(let i=0;i<n;i++){gd+=v;v=v*d-g}let vel=[(target[0]-start[0])/sum,(target[1]-start[1]-gd)/sum,(target[2]-start[2])/sum],pos=[...start];for(let i=0;i<Math.max(1,Math.round(t*n));i++){pos=[pos[0]+vel[0],pos[1]+vel[1],pos[2]+vel[2]];vel=[vel[0]*d,vel[1]*d-g,vel[2]*d]}return pos;}const lift=(Number.isFinite(motionArcHeight)&&motionArcHeight>=0?motionArcHeight:1.5)*env;return [start[0]+(target[0]-start[0])*t,start[1]+(target[1]-start[1])*t-lift,start[2]+(target[2]-start[2])*t]}
 function draw(){const w=canvas.clientWidth,h=canvas.clientHeight;ctx.clearRect(0,0,w,h);const s=Math.min(w/(width*scale+40),h/(height*scale+70))*zoom;
   ctx.save();ctx.translate(w/2-(width*scale/2)*s,h/2+(height*scale/2)*s);ctx.fillStyle='#141a28';ctx.fillRect(-10*s,-10*s,width*scale*s+20*s,height*scale*s+20*s);
   const visible=Math.floor(Math.max(0,(tick-firstTick)/(endTick-firstTick))*pixels.length);
   for(let i=0;i<visible;i++){const p=pixels[i],c=(DATA.palette?.[p[2]]?.color)||[180,180,180];ctx.fillStyle=`rgb(${c[0]},${c[1]},${c[2]})`;ctx.fillRect(p[0]*scale*s,(height-1-p[1])*scale*s,scale*s+.2,scale*s+.2)}
-  const active=Math.min(pixels.length-visible,Math.max(0,Math.floor((tick-firstTick)/2)));for(let i=0;i<Math.min(active,700);i++){const p=pixels[visible+i];if(!p)break;const t=Math.min(1,Math.max(0,(tick-firstTick)/(endTick-firstTick)+i/Math.max(1,pixels.length)));const c=(DATA.palette?.[p[2]]?.color)||[180,180,180];const sx=width*scale*.5,sy=height*scale+8;const tx=p[0]*scale,ty=(height-1-p[1])*scale;const arc=Math.sin(t*Math.PI)*Math.min(width,height)*.12;const x=sx+(tx-sx)*t,y=sy+(ty-sy)*t-arc;ctx.fillStyle=`rgb(${c[0]},${c[1]},${c[2]})`;ctx.shadowColor=ctx.fillStyle;ctx.shadowBlur=8*s;ctx.fillRect(x*s,y*s,scale*s,scale*s);ctx.shadowBlur=0}
+  const active=Math.min(pixels.length-visible,Math.max(0,Math.floor((tick-firstTick)/2)));for(let i=0;i<Math.min(active,700);i++){const p=pixels[visible+i];if(!p)break;const eventIndex=Math.min(events.length-1,Math.floor(((visible+i+1)*events.length-1)/Math.max(1,pixels.length))),event=events[eventIndex]||[0,60];const t=Math.min(1,Math.max(0,(tick-firstTick)/(endTick-firstTick)+i/Math.max(1,pixels.length)));const c=(DATA.palette?.[p[2]]?.color)||[180,180,180];const source=keyboardSource(event[1]),tx=p[0]*scale,ty=(height-1-p[1])*scale;const point=motionPoint(source,[tx,ty,0],t);const x=point[0],y=point[1];ctx.fillStyle=`rgb(${c[0]},${c[1]},${c[2]})`;ctx.shadowColor=ctx.fillStyle;ctx.shadowBlur=8*s;ctx.fillRect(x*s,y*s,scale*s,scale*s);ctx.shadowBlur=0}
   ctx.restore();
-  tickLabel.textContent=Math.floor(tick);timeline.value=Math.floor(tick);const density=events.filter(e=>e[0]>=tick&&e[0]<tick+40).length/40;stats.textContent=`events: ${events.length}\npixels: ${pixels.length}\ncanvas: ${width}×${height} logical / ${width*scale}×${height*scale} physical\nactive preview: ${Math.min(active,700)}\nnext-40t density: ${density.toFixed(2)} notes/tick\nmode: ${document.querySelector('#mode').value}`;
+  tickLabel.textContent=Math.floor(tick);timeline.value=Math.floor(tick);const density=events.filter(e=>e[0]>=tick&&e[0]<tick+40).length/40;stats.textContent=`events: ${events.length}\npixels: ${pixels.length}\ncanvas: ${width}×${height} logical / ${width*scale}×${height*scale} physical\nactive preview: ${Math.min(active,700)}\nnext-40t density: ${density.toFixed(2)} notes/tick\nmode: ${document.querySelector('#mode').value}\nmotion: ${motionMode}${motionMode==='vanilla'?' (actual collision decides landing; server commits target)':''}`;
 }
 function frame(now){const dt=Math.min(100,now-lastTime);lastTime=now;if(playing){tick+=dt/50*speed;if(tick>=endTick){tick=endTick;playing=false;document.querySelector('#play').textContent='Play'}}draw();requestAnimationFrame(frame)}requestAnimationFrame(frame);
 document.querySelector('#play').onclick=()=>{playing=!playing;document.querySelector('#play').textContent=playing?'Pause':'Play'};
-document.querySelector('#step').onclick=()=>{tick=Math.min(endTick,tick+1);draw()};document.querySelector('#reset').onclick=()=>{tick=firstTick;playing=false;draw()};timeline.oninput=()=>{tick=Number(timeline.value);draw()};document.querySelector('#speed').oninput=e=>{speed=Number(e.target.value);document.querySelector('#speedLabel').textContent=speed.toFixed(2)+'×'};document.querySelector('#zoom').oninput=e=>{zoom=Number(e.target.value)};document.querySelector('#mode').onchange=draw;draw();
+document.querySelector('#step').onclick=()=>{tick=Math.min(endTick,tick+1);draw()};document.querySelector('#reset').onclick=()=>{tick=firstTick;playing=false;draw()};timeline.oninput=()=>{tick=Number(timeline.value);draw()};document.querySelector('#speed').oninput=e=>{speed=Number(e.target.value);document.querySelector('#speedLabel').textContent=speed.toFixed(2)+'×'};document.querySelector('#zoom').oninput=e=>{zoom=Number(e.target.value)};document.querySelector('#mode').onchange=draw;document.querySelector('#motion').onchange=e=>{motionMode=e.target.value;draw()};draw();
 </script></body></html>"""
 
 

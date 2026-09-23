@@ -22,6 +22,11 @@ public final class PianoLayout {
     private final int imageHeight;
     private final int pixelScale;
     private final int canvasLift;
+    private final int canvasOffsetX;
+    private final int canvasOffsetY;
+    private final int canvasOffsetZ;
+    private final int backingThickness;
+    private final int borderThickness;
 
     public PianoLayout(int noteMin, int noteMax, int keyboardDepth, int canvasGap, Surface surface) {
         this(noteMin, noteMax, keyboardDepth, canvasGap, surface, 1, 1, 1, 1);
@@ -29,6 +34,20 @@ public final class PianoLayout {
 
     public PianoLayout(int noteMin, int noteMax, int keyboardDepth, int canvasGap, Surface surface,
                        int imageWidth, int imageHeight, int pixelScale, int canvasLift) {
+        this(noteMin, noteMax, keyboardDepth, canvasGap, surface, imageWidth, imageHeight, pixelScale, canvasLift, 0, 0, 0);
+    }
+
+    public PianoLayout(int noteMin, int noteMax, int keyboardDepth, int canvasGap, Surface surface,
+                       int imageWidth, int imageHeight, int pixelScale, int canvasLift,
+                       int canvasOffsetX, int canvasOffsetY, int canvasOffsetZ) {
+        this(noteMin, noteMax, keyboardDepth, canvasGap, surface, imageWidth, imageHeight, pixelScale, canvasLift,
+                canvasOffsetX, canvasOffsetY, canvasOffsetZ, 1, 2);
+    }
+
+    public PianoLayout(int noteMin, int noteMax, int keyboardDepth, int canvasGap, Surface surface,
+                       int imageWidth, int imageHeight, int pixelScale, int canvasLift,
+                       int canvasOffsetX, int canvasOffsetY, int canvasOffsetZ,
+                       int backingThickness, int borderThickness) {
         this.noteMin = noteMin;
         this.noteMax = noteMax;
         this.keyboardDepth = Math.max(1, keyboardDepth);
@@ -38,7 +57,14 @@ public final class PianoLayout {
         this.imageHeight = Math.max(1, imageHeight);
         this.pixelScale = Math.max(1, Math.min(3, pixelScale));
         this.canvasLift = Math.max(0, canvasLift);
+        this.canvasOffsetX = clampOffset(canvasOffsetX);
+        this.canvasOffsetY = clampOffset(canvasOffsetY);
+        this.canvasOffsetZ = clampOffset(canvasOffsetZ);
+        this.backingThickness = Math.max(1, Math.min(16, backingThickness));
+        this.borderThickness = Math.max(1, Math.min(16, borderThickness));
     }
+
+    private static int clampOffset(int value) { return Math.max(-128, Math.min(128, value)); }
 
     public static PianoLayout from(ShowPackage show) {
         JsonObject layout = show.layout();
@@ -59,8 +85,26 @@ public final class PianoLayout {
                 : show.manifest().has("surface") ? show.manifest().get("surface").getAsString()
                 : show.manifest().has("orientation") ? show.manifest().get("orientation").getAsString() : "wall_north";
         int lift = canvas.has("canvasLift") ? canvas.get("canvasLift").getAsInt() : (show.formatVersion() >= 2 ? 2 : 0);
+        int offsetX = 0, offsetY = 0, offsetZ = 0;
+        int backingThickness = canvas.has("backingThickness") ? canvas.get("backingThickness").getAsInt() : 1;
+        int borderThickness = canvas.has("borderThickness") ? canvas.get("borderThickness").getAsInt() : 2;
+        // New position metadata is a v2 feature. A legacy package must retain
+        // its original origin even if an unrelated metadata writer added a
+        // similarly named field.
+        var positionOffset = show.formatVersion() >= 2 && canvas.has("positionOffset") && canvas.get("positionOffset").isJsonArray()
+                ? canvas.getAsJsonArray("positionOffset")
+                : show.formatVersion() >= 2 && show.manifest().has("canvasOffset") && show.manifest().get("canvasOffset").isJsonArray()
+                ? show.manifest().getAsJsonArray("canvasOffset") : null;
+        if (positionOffset != null) {
+            if (positionOffset.size() >= 3) {
+                offsetX = positionOffset.get(0).getAsInt();
+                offsetY = positionOffset.get(1).getAsInt();
+                offsetZ = positionOffset.get(2).getAsInt();
+            }
+        }
         return new PianoLayout(noteMin, noteMax, keyboardDepth, canvasGap, parseSurface(surfaceName),
-                show.imageWidth(), show.imageHeight(), show.pixelScale(), lift);
+                show.logicalWidth(), show.logicalHeight(), show.pixelScale(), lift, offsetX, offsetY, offsetZ,
+                backingThickness, borderThickness);
     }
 
     private static Surface parseSurface(String value) {
@@ -82,6 +126,11 @@ public final class PianoLayout {
     public int imageHeight() { return imageHeight; }
     public int pixelScale() { return pixelScale; }
     public int canvasLift() { return canvasLift; }
+    public int canvasOffsetX() { return canvasOffsetX; }
+    public int canvasOffsetY() { return canvasOffsetY; }
+    public int canvasOffsetZ() { return canvasOffsetZ; }
+    public int backingThickness() { return backingThickness; }
+    public int borderThickness() { return borderThickness; }
     public int physicalWidth() { return imageWidth * pixelScale; }
     public int physicalHeight() { return imageHeight * pixelScale; }
 
@@ -113,20 +162,35 @@ public final class PianoLayout {
         return origin.add(whiteIndex(note) * 2 + 1, 1, depthIndex);
     }
 
+    /**
+     * Returns the first physical block used by the requested key.  Keeping
+     * this calculation in the layout makes playback and diagnostics use the
+     * exact same key geometry as stage construction.
+     */
+    public BlockPos noteKeyBlock(BlockPos origin, int note) {
+        int depth = Math.min(1, Math.max(0, keyboardDepth - 1));
+        return isBlack(note) ? blackKeyPos(origin, note, depth) : whiteKeyPos(origin, note, depth);
+    }
+
     public Vec3d noteLaunchPosition(BlockPos origin, int note) {
-        BlockPos key = isBlack(note) ? blackKeyPos(origin, note, Math.min(1, keyboardDepth - 1)) : whiteKeyPos(origin, note, Math.min(1, keyboardDepth - 1));
-        return new Vec3d(key.getX() + 0.5, key.getY() + (isBlack(note) ? 1.8 : 1.2), key.getZ() + 0.5);
+        BlockPos key = noteKeyBlock(origin, note);
+        // White keys occupy two blocks in X, so launch from their centre
+        // instead of the left half. Black keys occupy one block.
+        double x = key.getX() + (isBlack(note) ? 0.5 : 1.0);
+        double y = key.getY() + (isBlack(note) ? 1.8 : 1.2);
+        return new Vec3d(x, y, key.getZ() + 0.5);
     }
 
     /** The top-left logical pixel anchor in world space. */
     public BlockPos canvasOrigin(BlockPos origin) {
-        return switch (surface) {
+        BlockPos base = switch (surface) {
             case FLOOR -> origin.add(0, 1 + canvasLift, keyboardDepth + canvasGap);
             case WALL_NORTH -> origin.add(0, canvasLift + physicalHeight() - 1, -canvasGap);
             case WALL_SOUTH -> origin.add(0, canvasLift + physicalHeight() - 1, keyboardDepth + canvasGap);
             case WALL_EAST -> origin.add(keyboardWidth() + canvasGap, canvasLift + physicalHeight() - 1, 0);
             case WALL_WEST -> origin.add(-canvasGap, canvasLift + physicalHeight() - 1, 0);
         };
+        return base.add(canvasOffsetX, canvasOffsetY, canvasOffsetZ);
     }
 
     /** Top-left block of the physical footprint for a logical pixel. */
@@ -173,6 +237,23 @@ public final class PianoLayout {
             case WALL_SOUTH -> new Vec3d(0, 0, 1);
             case WALL_EAST -> new Vec3d(1, 0, 0);
             case WALL_WEST -> new Vec3d(-1, 0, 0);
+        };
+    }
+
+    /** Horizontal image axis in world space, used by motion scatter and previews. */
+    public Vec3d canvasAxisX() {
+        return switch (surface) {
+            case FLOOR, WALL_NORTH, WALL_SOUTH -> new Vec3d(1, 0, 0);
+            case WALL_EAST -> new Vec3d(0, 0, 1);
+            case WALL_WEST -> new Vec3d(0, 0, -1);
+        };
+    }
+
+    /** Image-down axis in world space. */
+    public Vec3d canvasAxisY() {
+        return switch (surface) {
+            case FLOOR -> new Vec3d(0, 0, 1);
+            case WALL_NORTH, WALL_SOUTH, WALL_EAST, WALL_WEST -> new Vec3d(0, -1, 0);
         };
     }
 

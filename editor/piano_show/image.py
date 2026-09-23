@@ -33,13 +33,26 @@ def compile_image(
     *,
     transparent_threshold: int = 8,
     dither: bool = False,
+    image_rotation: int = 0,
 ) -> tuple[list[Pixel], bytes, int, int]:
     """Resize an image, quantize it and return a serpentine pixel queue plus preview PNG."""
     if resolution <= 0 or resolution > 65535:
         raise ValueError("resolution must be in the range 1..65535")
     if not palette:
         raise ValueError("palette cannot be empty")
+    if image_rotation not in (0, 90, 180, 270):
+        raise ValueError("image_rotation must be 0, 90, 180 or 270")
     source = Image.open(path).convert("RGBA")
+    # Pillow's ROTATE_270 is a clockwise 90° turn.  Keeping this transform
+    # before the deterministic fit means the same logical coordinates are used
+    # by the editor, compiler and Minecraft package.
+    if image_rotation:
+        transpose = {
+            90: Image.Transpose.ROTATE_270,
+            180: Image.Transpose.ROTATE_180,
+            270: Image.Transpose.ROTATE_90,
+        }[image_rotation]
+        source = source.transpose(transpose)
     image = ImageOps.fit(source, (resolution, resolution), method=Image.Resampling.LANCZOS)
 
     pixels: list[Pixel] = []

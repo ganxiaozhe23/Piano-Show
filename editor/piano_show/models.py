@@ -40,6 +40,7 @@ class CompileOptions:
     orientation: str = "wall_north"
     surface: str = "wall_north"
     canvas_gap: int = 8
+    canvas_offset: tuple[int, int, int] = (0, 0, 0)
     keyboard_depth: int = 4
     backing_block: str = "minecraft:black_concrete"
     border_block: str = "minecraft:gray_concrete"
@@ -52,6 +53,11 @@ class CompileOptions:
     visual_mode: str = "display"
     timing_mode: str = "adaptive"
     canvas_lift: int = 2
+    image_rotation: int = 0
+    motion_mode: str = "arc"
+    motion_gravity: float = 0.04
+    motion_drag: float = 0.98
+    motion_arc_height: float = 1.5
     backing_thickness: int = 1
     border_thickness: int = 2
     base_spawn_per_tick: int = 32
